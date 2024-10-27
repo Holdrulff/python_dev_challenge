@@ -6,7 +6,8 @@ from fastapi import Depends, FastAPI, HTTPException, Query, File, UploadFile
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 class Company(SQLModel, table=True):
-    cnpj: str = Field(primary_key=True, nullable=False)
+    id: int = Field(primary_key=True, default=None)
+    cnpj: str = Field(nullable=False)
     denom_social: str = Field(nullable=False)
     sit: str = Field(nullable=False)
     updated_at: datetime.datetime = Field(default_factory=datetime.datetime.utcnow, nullable=False)
@@ -36,25 +37,18 @@ def on_startup():
 def read_root():
     return {"message": "API está funcionando"}
 
-@app.post("/companies/")
-def create_company(company: Company, session: SessionDep) -> Company:
-    company.updated_at = datetime.datetime.utcnow()
-    session.add(company)
-    session.commit()
-    session.refresh(company)
-    return company
-
 @app.get("/companies/")
 def read_companies(
     session: SessionDep,
+    date: datetime.datetime,
     offset: int = 0,
     limit: Annotated[int, Query(le=100)] = 100
 ) -> list[Company]:
-    companies = session.exec(select(Company).offset(offset).limit(limit)).all()
+    companies = session.exec(select(Company).where(Company.updated_at == date).offset(offset).limit(limit)).all()
     return companies
 
 @app.post("/companies/upload/")
-async def upload_companies(session: SessionDep, file: UploadFile = File(...)) -> list[dict]:
+async def upload_companies(session: SessionDep, file: UploadFile = File(...)) -> str:
     try:
         # Tente ler o conteúdo do arquivo CSV
         df = pd.read_csv(file.file, sep=";", encoding='latin1', on_bad_lines='skip')  # Ignora linhas com erro
@@ -83,14 +77,16 @@ async def upload_companies(session: SessionDep, file: UploadFile = File(...)) ->
             cnpj=row['cnpj'],
             denom_social=row['denom_social'],
             sit=row['sit'],
-            updated_at=datetime.datetime.utcnow()
+            updated_at=datetime.datetime.utcnow().date()
         )
         
         # Verifica se o CNPJ já existe
         existing_company = session.exec(select(Company).where(Company.cnpj == company.cnpj)).first()
         if existing_company is None:
             session.add(company)
+        else:
+            session.merge(company)
 
     session.commit()
 
-    return filtered_df.to_dict(orient='records')
+    return "Arquivo carregado com sucesso"
